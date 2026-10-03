@@ -38,7 +38,7 @@ There is nothing to `pip install`.
 ## Running from source
 
 ```
-git clone https://github.com/<your-account>/PolySSH.git
+git clone https://github.com/mrnaz/PolySSH.git
 cd PolySSH
 python PolySSH.py
 ```

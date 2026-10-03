@@ -5,7 +5,7 @@ from typing import Optional
 from database import Database
 from export_sites import export_filezilla, export_generic_uri, export_winscp
 from settings import SettingsManager
-from ui import center_on_parent, theme
+from ui import center_on_parent, section_header, theme
 
 _PAD = {"padx": 6, "pady": 4}
 
@@ -39,13 +39,7 @@ class SettingsDialog(tk.Toplevel):
     def _build_ui(self) -> None:
         self.columnconfigure(1, weight=1)
 
-        row = 0
-
-        # ── Terminal Font ────────────────────────────────────────────
-        ttk.Label(self, text="Terminal Font", font=theme.FONT_BOLD).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(8, 0)
-        )
-        row += 1
+        row = section_header(self, 0, "Terminal Font", columnspan=2)
         ttk.Label(self, text="(Windows only)", foreground=theme.FG_MUTED).grid(
             row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4)
         )
@@ -66,16 +60,7 @@ class SettingsDialog(tk.Toplevel):
         ).grid(row=row, column=1, sticky="w", **_PAD)
         row += 1
 
-        ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 4)
-        )
-        row += 1
-
-        # ── Terminal Size ────────────────────────────────────────────
-        ttk.Label(self, text="Terminal Size", font=theme.FONT_BOLD).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 2)
-        )
-        row += 1
+        row = section_header(self, row, "Terminal Size", columnspan=2)
 
         ttk.Label(self, text="Columns:").grid(row=row, column=0, sticky="e", **_PAD)
         self._cols_var = tk.StringVar()
@@ -98,16 +83,7 @@ class SettingsDialog(tk.Toplevel):
         )
         row += 1
 
-        ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 4)
-        )
-        row += 1
-
-        # ── SSH Keys ─────────────────────────────────────────────────
-        ttk.Label(self, text="SSH Keys", font=theme.FONT_BOLD).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 2)
-        )
-        row += 1
+        row = section_header(self, row, "SSH Keys", columnspan=2)
 
         ttk.Label(self, text="Key Directory:").grid(row=row, column=0, sticky="e", **_PAD)
         key_dir_frame = ttk.Frame(self)
@@ -127,16 +103,7 @@ class SettingsDialog(tk.Toplevel):
         ).grid(row=row, column=1, sticky="w", padx=6, pady=(0, 6))
         row += 1
 
-        ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 4)
-        )
-        row += 1
-
-        # ── Export Sites ─────────────────────────────────────────────
-        ttk.Label(self, text="Export Sites", font=theme.FONT_BOLD).grid(
-            row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 2)
-        )
-        row += 1
+        row = section_header(self, row, "Export Sites", columnspan=2)
 
         self._export_format_var = tk.StringVar(value="winscp")
         for key, (label, _ext, _filetypes) in _EXPORT_FORMATS.items():
@@ -150,14 +117,8 @@ class SettingsDialog(tk.Toplevel):
         ttk.Button(export_btn_frame, text="Export…", command=self._export_sites).pack(side="left")
         row += 1
 
-        ttk.Separator(self, orient="horizontal").grid(
-            row=row, column=0, columnspan=2, sticky="ew", padx=6, pady=(6, 4)
-        )
-        row += 1
-
-        # ── Buttons ──────────────────────────────────────────────────
         btn_frame = ttk.Frame(self, padding=(6, 4))
-        btn_frame.grid(row=row, column=0, columnspan=2, sticky="e")
+        btn_frame.grid(row=row, column=0, columnspan=2, sticky="e", pady=(8, 0))
         ttk.Button(btn_frame, text="Save", command=self._save).pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side="left", padx=4)
 

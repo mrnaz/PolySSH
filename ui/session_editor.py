@@ -1,11 +1,15 @@
+import base64
+import math
+import struct
 import tkinter as tk
+import zlib
 from pathlib import Path
 from tkinter import ttk, colorchooser, filedialog, messagebox
 from typing import Callable, Optional
 
 from models import Session
 from ssh import DEFAULT_IDENTITY_MARKER, find_ssh, test_connection
-from ui import center_on_parent, theme
+from ui import center_on_parent, section_header, theme
 
 
 _AUTH_METHOD_LABELS = {
@@ -29,6 +33,40 @@ _MULTI_IDENTITY = {"identity", "fido2"}
 _IDENTITY_REQUIRED = _SINGLE_IDENTITY | _MULTI_IDENTITY
 
 _PAD = {"padx": 6, "pady": 3}
+
+
+def _radio_png(size: int, hex_color: str, selected: bool, scale: float) -> bytes:
+    """Anti-aliased radio button as a transparent PNG. Tk's canvas can't
+    anti-alias on Windows, so this is rasterised by hand (4x4 supersampling
+    per pixel) at the real pixel size — crisp at any DPI, no dependencies."""
+    r, g, b = (int(hex_color[i:i + 2], 16) for i in (1, 3, 5))
+    center = size / 2
+    outer = size / 2 - 0.75 * scale
+    inner = outer - 1.4 * scale
+    dot = size * 0.2
+    n = 4
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)
+        for x in range(size):
+            hits = 0
+            for sy in range(n):
+                for sx in range(n):
+                    d = math.hypot(x + (sx + 0.5) / n - center, y + (sy + 0.5) / n - center)
+                    if inner <= d <= outer or (selected and d <= dot):
+                        hits += 1
+            rows += bytes((r, g, b, round(255 * hits / (n * n))))
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        body = tag + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes(rows)))
+        + chunk(b"IEND", b"")
+    )
 
 
 class SessionEditor(tk.Toplevel):
@@ -66,29 +104,32 @@ class SessionEditor(tk.Toplevel):
         self.wait_window()
         return self._result
 
+    def _entry_row(self, row: int, label: str, key: str) -> int:
+        ttk.Label(self, text=label + ":").grid(row=row, column=0, sticky="e", **_PAD)
+        var = tk.StringVar()
+        self._vars[key] = var
+        ttk.Entry(self, textvariable=var, width=42).grid(
+            row=row, column=1, columnspan=2, sticky="ew", **_PAD
+        )
+        return row + 1
+
     def _build_ui(self) -> None:
         self.columnconfigure(1, weight=1)
 
-        simple_fields = [
-            ("Name",      "name"),
-            ("Folder",    "folder"),
-            ("Hostname",  "hostname"),
-            ("Port",      "port"),
-            ("Username",  "username"),
-        ]
-
         self._vars: dict[str, tk.StringVar] = {}
 
-        for row, (label, key) in enumerate(simple_fields):
-            ttk.Label(self, text=label + ":").grid(row=row, column=0, sticky="e", **_PAD)
-            var = tk.StringVar()
-            self._vars[key] = var
-            ttk.Entry(self, textvariable=var, width=42).grid(
-                row=row, column=1, columnspan=2, sticky="ew", **_PAD
-            )
+        r = section_header(self, 0, "Connection Name")
+        r = self._entry_row(r, "Name", "name")
+        r = self._entry_row(r, "Folder", "folder")
+
+        r = section_header(self, r, "Host Details")
+        r = self._entry_row(r, "Hostname", "hostname")
+        r = self._entry_row(r, "Port", "port")
+
+        r = section_header(self, r, "Auth Details")
+        r = self._entry_row(r, "Username", "username")
 
         # Auth method
-        r = len(simple_fields)
         ttk.Label(self, text="Auth Method:").grid(row=r, column=0, sticky="e", **_PAD)
         self._auth_var = tk.StringVar(value=_AUTH_METHOD_LABELS["default"])
         self._auth_combo = ttk.Combobox(
@@ -124,12 +165,13 @@ class SessionEditor(tk.Toplevel):
 
         # Multi-file mode ("Local Identity"/"FIDO 2 Auth"): several keys can
         # stay registered for quick switching, but only one — marked with a
-        # star — is ever actually used to connect. List order is purely
+        # radio button — is ever actually used to connect. List order is purely
         # cosmetic/organizational and never changes on its own.
         self._identity_files: list[str] = []
         self._identity_selected: Optional[int] = None  # row selected for Remove
         self._identity_default: Optional[int] = None  # row used to connect; None = index 0
         self._identity_enabled: bool = True
+        self._radio_images: dict[bool, tk.PhotoImage] = {}
 
         self._identity_multi_frame = ttk.Frame(self)
         self._identity_multi_frame.columnconfigure(0, weight=1)
@@ -147,16 +189,10 @@ class SessionEditor(tk.Toplevel):
         )
         self._identity_remove_btn.pack(side="left")
 
-        # ProxyJump
-        r += 1
-        ttk.Label(self, text="ProxyJump:").grid(row=r, column=0, sticky="e", **_PAD)
-        self._vars["proxy_jump"] = tk.StringVar()
-        ttk.Entry(self, textvariable=self._vars["proxy_jump"], width=42).grid(
-            row=r, column=1, columnspan=2, sticky="ew", **_PAD
-        )
+        r = section_header(self, r + 1, "Other")
+        r = self._entry_row(r, "ProxyJump", "proxy_jump")
 
         # Background colour
-        r += 1
         ttk.Label(self, text="Background:").grid(row=r, column=0, sticky="e", **_PAD)
         color_frame = ttk.Frame(self)
         color_frame.grid(row=r, column=1, columnspan=2, sticky="w", **_PAD)
@@ -173,7 +209,7 @@ class SessionEditor(tk.Toplevel):
         # Buttons
         r += 1
         btn_frame = ttk.Frame(self, padding=(6, 6))
-        btn_frame.grid(row=r, column=0, columnspan=3, sticky="ew")
+        btn_frame.grid(row=r, column=0, columnspan=3, sticky="ew", pady=(8, 0))
 
         if self._on_delete:
             ttk.Button(btn_frame, text="Delete", command=self._delete).pack(side="left", padx=4)
@@ -325,6 +361,16 @@ class SessionEditor(tk.Toplevel):
         self._identity_default = index
         self._rebuild_identity_rows()
 
+    def _make_radio(self, parent: tk.Misc, bg: str, selected: bool) -> tk.Label:
+        image = self._radio_images.get(selected)
+        if image is None:
+            scale = self.winfo_fpixels("1i") / 96
+            color = theme.RADIO_ON if selected else theme.RADIO_OFF
+            png = _radio_png(round(14 * scale), color, selected, scale)
+            image = tk.PhotoImage(master=self, data=base64.b64encode(png).decode("ascii"))
+            self._radio_images[selected] = image
+        return tk.Label(parent, image=image, bg=bg, bd=0, highlightthickness=0)
+
     def _rebuild_identity_rows(self) -> None:
         for child in self._identity_rows.winfo_children():
             child.destroy()
@@ -336,29 +382,25 @@ class SessionEditor(tk.Toplevel):
             row_bg = theme.SELECTION if selected else theme.SURFACE
             row = tk.Frame(self._identity_rows, bg=row_bg)
             row.grid(row=index, column=0, sticky="ew")
-            row.columnconfigure(0, weight=1)
+            row.columnconfigure(1, weight=1)
+
+            is_default = index == default_index
+            radio = self._make_radio(row, row_bg, is_default)
+            radio.grid(row=0, column=0, padx=(6, 2), pady=2)
+            if self._identity_enabled and not is_default:
+                radio.configure(cursor="hand2")
+                radio.bind("<Button-1>", lambda _e, i=index: self._make_default_identity(i))
 
             label = tk.Label(row, text=filename, anchor="w", bg=row_bg, fg=theme.FG)
-            label.grid(row=0, column=0, sticky="ew", padx=4, pady=2)
+            label.grid(row=0, column=1, sticky="ew", padx=4, pady=2)
             if self._identity_enabled:
                 label.bind("<Button-1>", lambda _e, i=index: self._select_identity_row(i))
 
-            is_default = index == default_index
             if is_default:
                 tk.Label(
                     row, text="Default", bg=row_bg, fg=theme.ACCENT,
                     font=(theme.FONT_FAMILY, 8),
-                ).grid(row=0, column=1, padx=(4, 2), pady=2)
-
-            star = tk.Label(
-                row, text="★" if is_default else "☆", bg=row_bg,
-                fg=theme.DEFAULT_STAR if is_default else theme.FG_MUTED,
-                cursor="arrow" if (is_default or not self._identity_enabled) else "hand2",
-                font=(theme.FONT_FAMILY, 9),
-            )
-            star.grid(row=0, column=2, padx=(1, 5), pady=2)
-            if self._identity_enabled and not is_default:
-                star.bind("<Button-1>", lambda _e, i=index: self._make_default_identity(i))
+                ).grid(row=0, column=2, padx=(4, 6), pady=2)
 
         if not self._identity_files:
             tk.Label(

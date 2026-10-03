@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ def find_ssh() -> Optional[str]:
 
 
 DEFAULT_IDENTITY_MARKER = "*"
+_KEY_AUTH_METHODS = ("default", "identity", "fido2")
 
 
 def parse_identity_files(identity_file: Optional[str]) -> list[str]:
@@ -113,6 +115,13 @@ def test_connection(
     Returns a human-readable success message. Raises RuntimeError with an
     informative message on failure.
     """
+    if session.auth_method in _KEY_AUTH_METHODS:
+        selected = get_selected_identity(session.identity_file)
+        if selected:
+            key_path = resolve_identity_file(selected, identity_key_dir)
+            if not os.path.isfile(key_path):
+                raise RuntimeError(f"Key file not found:\n{key_path}")
+
     ssh_args = build_ssh_args(session, identity_key_dir)
     args = [
         ssh_args[0],
@@ -159,12 +168,12 @@ def test_connection(
     stderr = (result.stderr or "").strip() or f"ssh exited with code {result.returncode}."
 
     if "permission denied" in stderr.lower():
-        if session.auth_method == "identity":
+        if session.auth_method in ("default", "identity"):
             raise RuntimeError(
                 f"{stderr}\n\n"
-                "If your identity file has a passphrase and isn't loaded in an "
-                "SSH agent, this test will fail even though Connect would "
-                "prompt you for it interactively."
+                "Either the server doesn't accept this key, or the key has a "
+                "passphrase and isn't loaded in an SSH agent (this test can't "
+                "prompt for it, though Connect would)."
             )
         if session.auth_method == "fido2":
             raise RuntimeError(
@@ -174,9 +183,20 @@ def test_connection(
                 "didn't match. Reconnect the key and try again, or use Connect "
                 "to retry interactively."
             )
-        # password / default: BatchMode can't answer an interactive password
-        # prompt, so a permission denial here doesn't mean the session is
-        # actually broken — only that this headless test can't verify it.
+        # password: BatchMode can't answer an interactive prompt, so a denial
+        # here only means this headless test can't verify it — unless the
+        # server's own list of accepted methods doesn't include a password
+        # method at all, in which case Connect can't succeed either.
+        offered = re.search(r"permission denied \(([^)]*)\)", stderr, re.IGNORECASE)
+        if offered:
+            methods = {m.strip() for m in offered.group(1).split(",")}
+            if not methods & {"password", "keyboard-interactive"}:
+                raise RuntimeError(
+                    f"{stderr}\n\n"
+                    "This server doesn't accept password login "
+                    f"(it only offers: {', '.join(sorted(methods))}). "
+                    "Change this session's authentication method."
+                )
         return (
             f"Reached {session.hostname}, but authentication requires "
             "interactive input (e.g. a password) that this automated test "
