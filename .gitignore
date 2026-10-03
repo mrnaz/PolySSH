@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# PyInstaller build output (binaries are distributed separately)
+build/
+dist/
+*.spec
+
+# Runtime logs
+logs/
+
+# Local tooling / editor state
+.claude/
+.vscode/
+.idea/
+
+# OS junk
+Thumbs.db
+.DS_Store
+
+# Never commit key material or app data
+*.db
+settings.json
+naz_yubikey/
+id_*
+*.pem
+*.ppk
