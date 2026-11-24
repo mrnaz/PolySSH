@@ -15,5 +15,6 @@ class Session:
     proxy_jump: Optional[str] = None
     sort_order: Optional[int] = None
     background_color: Optional[str] = None
+    speed_dial: Optional[int] = None
     created_at: Optional[str] = None
     updated_at: Optional[str] = None

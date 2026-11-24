@@ -37,56 +37,58 @@ class SettingsDialog(tk.Toplevel):
         self.wait_window()
 
     def _build_ui(self) -> None:
-        self.columnconfigure(1, weight=1)
+        content = ttk.Frame(self, padding=theme.px(18))
+        content.pack(fill="both", expand=True)
+        content.columnconfigure(1, weight=1)
 
-        row = section_header(self, 0, "Terminal Font", columnspan=2)
-        ttk.Label(self, text="(Windows only)", foreground=theme.FG_MUTED).grid(
+        row = section_header(content, 0, "Terminal Font", columnspan=2)
+        ttk.Label(content, text="(Windows only)", foreground=theme.FG_MUTED).grid(
             row=row, column=0, columnspan=2, sticky="w", padx=6, pady=(0, 4)
         )
         row += 1
 
-        ttk.Label(self, text="Font Face:").grid(row=row, column=0, sticky="e", **_PAD)
+        ttk.Label(content, text="Font Face:").grid(row=row, column=0, sticky="e", **_PAD)
         self._font_face_var = tk.StringVar()
-        ttk.Entry(self, textvariable=self._font_face_var, width=28).grid(
+        ttk.Entry(content, textvariable=self._font_face_var, width=28).grid(
             row=row, column=1, sticky="ew", **_PAD
         )
         row += 1
 
-        ttk.Label(self, text="Font Size:").grid(row=row, column=0, sticky="e", **_PAD)
+        ttk.Label(content, text="Font Size:").grid(row=row, column=0, sticky="e", **_PAD)
         self._font_size_var = tk.StringVar()
         ttk.Spinbox(
-            self, textvariable=self._font_size_var,
+            content, textvariable=self._font_size_var,
             from_=6, to=72, increment=1, width=6,
         ).grid(row=row, column=1, sticky="w", **_PAD)
         row += 1
 
-        row = section_header(self, row, "Terminal Size", columnspan=2)
+        row = section_header(content, row, "Terminal Size", columnspan=2)
 
-        ttk.Label(self, text="Columns:").grid(row=row, column=0, sticky="e", **_PAD)
+        ttk.Label(content, text="Columns:").grid(row=row, column=0, sticky="e", **_PAD)
         self._cols_var = tk.StringVar()
         ttk.Spinbox(
-            self, textvariable=self._cols_var,
+            content, textvariable=self._cols_var,
             from_=40, to=500, increment=1, width=6,
         ).grid(row=row, column=1, sticky="w", **_PAD)
         row += 1
 
-        ttk.Label(self, text="Rows:").grid(row=row, column=0, sticky="e", **_PAD)
+        ttk.Label(content, text="Rows:").grid(row=row, column=0, sticky="e", **_PAD)
         self._rows_var = tk.StringVar()
         ttk.Spinbox(
-            self, textvariable=self._rows_var,
+            content, textvariable=self._rows_var,
             from_=10, to=200, increment=1, width=6,
         ).grid(row=row, column=1, sticky="w", **_PAD)
         row += 1
 
-        ttk.Label(self, text="(leave blank to use terminal defaults)", foreground=theme.FG_MUTED).grid(
+        ttk.Label(content, text="(leave blank to use terminal defaults)", foreground=theme.FG_MUTED).grid(
             row=row, column=1, sticky="w", padx=6, pady=(0, 6)
         )
         row += 1
 
-        row = section_header(self, row, "SSH Keys", columnspan=2)
+        row = section_header(content, row, "SSH Keys", columnspan=2)
 
-        ttk.Label(self, text="Key Directory:").grid(row=row, column=0, sticky="e", **_PAD)
-        key_dir_frame = ttk.Frame(self)
+        ttk.Label(content, text="Key Directory:").grid(row=row, column=0, sticky="e", **_PAD)
+        key_dir_frame = ttk.Frame(content)
         key_dir_frame.grid(row=row, column=1, sticky="ew", **_PAD)
         key_dir_frame.columnconfigure(0, weight=1)
         self._key_dir_var = tk.StringVar()
@@ -96,30 +98,23 @@ class SettingsDialog(tk.Toplevel):
         )
         row += 1
 
-        ttk.Label(
-            self,
-            text="Sessions store just a key filename, resolved against this folder.",
-            foreground=theme.FG_MUTED,
-        ).grid(row=row, column=1, sticky="w", padx=6, pady=(0, 6))
-        row += 1
-
-        row = section_header(self, row, "Export Sites", columnspan=2)
+        row = section_header(content, row, "Export Sites", columnspan=2)
 
         self._export_format_var = tk.StringVar(value="winscp")
         for key, (label, _ext, _filetypes) in _EXPORT_FORMATS.items():
             ttk.Radiobutton(
-                self, text=label, value=key, variable=self._export_format_var
+                content, text=label, value=key, variable=self._export_format_var
             ).grid(row=row, column=1, sticky="w", padx=6, pady=1)
             row += 1
 
-        export_btn_frame = ttk.Frame(self)
+        export_btn_frame = ttk.Frame(content)
         export_btn_frame.grid(row=row, column=1, sticky="w", padx=6, pady=(4, 6))
         ttk.Button(export_btn_frame, text="Export…", command=self._export_sites).pack(side="left")
         row += 1
 
-        btn_frame = ttk.Frame(self, padding=(6, 4))
+        btn_frame = ttk.Frame(content, padding=(6, 4))
         btn_frame.grid(row=row, column=0, columnspan=2, sticky="e", pady=(8, 0))
-        ttk.Button(btn_frame, text="Save", command=self._save).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Save", command=self._save, style="Accent.TButton").pack(side="left", padx=4)
         ttk.Button(btn_frame, text="Cancel", command=self._cancel).pack(side="left", padx=4)
 
         self.bind("<Return>", lambda _: self._save())

@@ -29,7 +29,7 @@ from typing import Optional
 from models import Session
 from ssh import get_selected_identity, resolve_identity_file
 
-_IDENTITY_AUTH_METHODS = ("default", "identity", "fido2")
+_IDENTITY_AUTH_METHODS = ("keyfile",)
 
 
 def _selected_identity_path(session: Session, identity_key_dir: Optional[str]) -> Optional[str]:

@@ -1,7 +1,9 @@
+import base64
 import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -27,7 +29,42 @@ def find_ssh() -> Optional[str]:
 
 
 DEFAULT_IDENTITY_MARKER = "*"
-_KEY_AUTH_METHODS = ("default", "identity", "fido2")
+
+_OPENSSH_KEY_MAGIC = b"openssh-key-v1\x00"
+
+
+def is_security_key_file(path: str) -> bool:
+    """True if the file is an OpenSSH key for a FIDO2/security-key type
+    (sk-ssh-ed25519@openssh.com, sk-ecdsa-sha2-nistp256@openssh.com).
+
+    The key type sits in the unencrypted public section of the file, so this
+    works for passphrase-protected keys too. Anything unreadable or in a
+    different format is treated as an ordinary key."""
+    try:
+        with open(path, "rb") as f:
+            data = f.read(65536).decode("ascii", errors="ignore")
+        body = "".join(line for line in data.splitlines() if line and not line.startswith("-----"))
+        raw = base64.b64decode(body)
+        if not raw.startswith(_OPENSSH_KEY_MAGIC):
+            return False
+        pos = len(_OPENSSH_KEY_MAGIC)
+
+        def read_string() -> bytes:
+            nonlocal pos
+            (n,) = struct.unpack(">I", raw[pos:pos + 4])
+            value = raw[pos + 4:pos + 4 + n]
+            pos += 4 + n
+            return value
+
+        read_string()  # cipher name
+        read_string()  # kdf name
+        read_string()  # kdf options
+        pos += 4       # number of keys
+        public_blob = read_string()
+        (n,) = struct.unpack(">I", public_blob[:4])
+        return public_blob[4:4 + n].startswith(b"sk-")
+    except Exception:
+        return False
 
 
 def parse_identity_files(identity_file: Optional[str]) -> list[str]:
@@ -81,14 +118,11 @@ def resolve_identity_file(identity_file: str, identity_key_dir: Optional[str]) -
 def build_ssh_args(session: Session, identity_key_dir: Optional[str] = None) -> list[str]:
     args: list[str] = ["ssh"]
 
+    # "local" adds nothing on purpose: ssh's own behaviour (agent, ~/.ssh/config,
+    # default keys, then a password prompt) is exactly what that method means.
     if session.auth_method == "password":
         args += ["-o", "PubkeyAuthentication=no"]
-    elif session.auth_method in ("default", "identity", "fido2"):
-        # "default" means a single chosen key file rather than ssh's own
-        # implicit resolution (agent/~/.ssh/id_*) — but if one somehow
-        # isn't set (a pre-existing session from before this had a picker),
-        # fall through to that implicit behavior rather than adding
-        # IdentitiesOnly=yes with no -i, which would make ssh try nothing.
+    elif session.auth_method == "keyfile":
         selected = get_selected_identity(session.identity_file)
         if selected:
             args += ["-o", "IdentitiesOnly=yes", "-i", resolve_identity_file(selected, identity_key_dir)]
@@ -107,6 +141,90 @@ def build_ssh_args(session: Session, identity_key_dir: Optional[str] = None) -> 
     return args
 
 
+class HostKeyChangedError(RuntimeError):
+    """The server presented a different host key from the one saved in
+    known_hosts (typically after the server's OS was reinstalled)."""
+
+
+def _host_key_names(session: Session) -> list[str]:
+    """The names a session's host key can be filed under in known_hosts.
+
+    ssh -G reports the effective config, so a Host alias, HostName or
+    HostKeyAlias in ~/.ssh/config is honoured. The address(es) the name
+    resolves to are included too, because ssh may have saved those separately.
+    """
+    host, port = session.hostname, session.port
+    aliased = False
+    ssh = find_ssh()
+    if ssh:
+        kwargs: dict = {}
+        if sys.platform == "win32":
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        try:
+            out = subprocess.run(
+                [ssh, "-G", "-p", str(port), host],
+                capture_output=True, text=True, timeout=10, **kwargs,
+            ).stdout
+            config = {}
+            for line in out.splitlines():
+                key, _, value = line.partition(" ")
+                config.setdefault(key.lower(), value.strip())
+            aliased = bool(config.get("hostkeyalias"))
+            host = config.get("hostkeyalias") or config.get("hostname") or host
+            port = int(config.get("port") or port)
+        except Exception:
+            pass
+
+    def entry(name: str) -> str:
+        return name if port == 22 else f"[{name}]:{port}"
+
+    names = [entry(host)]
+    if not aliased:
+        try:
+            import ipaddress
+            import socket
+            try:
+                ipaddress.ip_address(host)
+            except ValueError:
+                for info in socket.getaddrinfo(host, None):
+                    address = info[4][0].split("%")[0]
+                    if entry(address) not in names:
+                        names.append(entry(address))
+        except Exception:
+            pass
+    return names
+
+
+def forget_host_key(session: Session, known_hosts_file: Optional[str] = None) -> list[str]:
+    """Remove a session's saved host key(s) from known_hosts using
+    ssh-keygen -R, which also handles hashed entries and keeps a .old backup.
+
+    Returns the names that were actually removed (empty if nothing was
+    saved). Raises RuntimeError if ssh-keygen is missing or fails."""
+    keygen = shutil.which("ssh-keygen")
+    if not keygen:
+        raise RuntimeError("ssh-keygen was not found in PATH.")
+
+    kwargs: dict = {}
+    if sys.platform == "win32":
+        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+
+    removed: list[str] = []
+    for name in _host_key_names(session):
+        cmd = [keygen, "-R", name]
+        if known_hosts_file:
+            cmd += ["-f", known_hosts_file]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15, **kwargs)
+        output = (result.stdout or "") + (result.stderr or "")
+        if re.search(r"^# Host .* found: line", output, re.MULTILINE):
+            removed.append(name)
+        elif result.returncode != 0 and not any(
+            phrase in output.lower() for phrase in ("not found", "does not exist", "no such file")
+        ):
+            raise RuntimeError(output.strip() or f"ssh-keygen exited with code {result.returncode}.")
+    return removed
+
+
 def test_connection(
     session: Session, identity_key_dir: Optional[str] = None, timeout: int = 10
 ) -> str:
@@ -115,12 +233,14 @@ def test_connection(
     Returns a human-readable success message. Raises RuntimeError with an
     informative message on failure.
     """
-    if session.auth_method in _KEY_AUTH_METHODS:
+    selected_is_sk = False
+    if session.auth_method == "keyfile":
         selected = get_selected_identity(session.identity_file)
         if selected:
             key_path = resolve_identity_file(selected, identity_key_dir)
             if not os.path.isfile(key_path):
                 raise RuntimeError(f"Key file not found:\n{key_path}")
+            selected_is_sk = is_security_key_file(key_path)
 
     ssh_args = build_ssh_args(session, identity_key_dir)
     args = [
@@ -136,13 +256,13 @@ def test_connection(
     if sys.platform == "win32":
         kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
 
-    # ConnectTimeout only bounds the initial network connection. FIDO2 needs
-    # extra time on top of that for a person to notice the key blinking,
+    # ConnectTimeout only bounds the initial network connection. A security
+    # key needs extra time on top of that for a person to notice it blinking,
     # touch it, and possibly retry after a failed fingerprint match — so its
     # overall watchdog budget is larger, not just its network timeout. Only
     # ever one identity is attempted (see get_selected_identity), so this
     # doesn't need to scale with how many are registered.
-    if session.auth_method == "fido2":
+    if selected_is_sk:
         overall_timeout = timeout + 25
     else:
         overall_timeout = timeout + 5
@@ -152,7 +272,7 @@ def test_connection(
             args, capture_output=True, text=True, timeout=overall_timeout, **kwargs,
         )
     except subprocess.TimeoutExpired:
-        if session.auth_method == "fido2":
+        if selected_is_sk:
             raise RuntimeError(
                 f"No response from {session.hostname} within {overall_timeout}s while "
                 "waiting on FIDO2 authentication.\nMake sure the security key is "
@@ -167,30 +287,42 @@ def test_connection(
 
     stderr = (result.stderr or "").strip() or f"ssh exited with code {result.returncode}."
 
+    lowered = stderr.lower()
+    if "host identification has changed" in lowered or "host key verification failed" in lowered:
+        raise HostKeyChangedError(
+            f"The host key for {session.hostname} doesn't match the one saved in known_hosts."
+        )
+
     if "permission denied" in stderr.lower():
-        if session.auth_method in ("default", "identity"):
+        if session.auth_method == "keyfile":
+            if selected_is_sk:
+                raise RuntimeError(
+                    f"{stderr}\n\n"
+                    "This usually means the security key wasn't plugged in, the "
+                    "touch/fingerprint wasn't confirmed in time, or the fingerprint "
+                    "didn't match. Reconnect the key and try again, or use Connect "
+                    "to retry interactively."
+                )
             raise RuntimeError(
                 f"{stderr}\n\n"
                 "Either the server doesn't accept this key, or the key has a "
                 "passphrase and isn't loaded in an SSH agent (this test can't "
                 "prompt for it, though Connect would)."
             )
-        if session.auth_method == "fido2":
-            raise RuntimeError(
-                f"{stderr}\n\n"
-                "This usually means the security key wasn't plugged in, the "
-                "touch/fingerprint wasn't confirmed in time, or the fingerprint "
-                "didn't match. Reconnect the key and try again, or use Connect "
-                "to retry interactively."
-            )
-        # password: BatchMode can't answer an interactive prompt, so a denial
-        # here only means this headless test can't verify it — unless the
-        # server's own list of accepted methods doesn't include a password
-        # method at all, in which case Connect can't succeed either.
+        # password / local: BatchMode can't answer an interactive prompt, so a
+        # denial here only means this headless test can't verify it — unless
+        # the server's own list of accepted methods doesn't include a password
+        # method at all, in which case Connect can't fall back to one either.
         offered = re.search(r"permission denied \(([^)]*)\)", stderr, re.IGNORECASE)
         if offered:
             methods = {m.strip() for m in offered.group(1).split(",")}
             if not methods & {"password", "keyboard-interactive"}:
+                if session.auth_method == "local":
+                    raise RuntimeError(
+                        f"{stderr}\n\n"
+                        f"This server only accepts: {', '.join(sorted(methods))}, "
+                        "and none of the keys ssh found on this machine matched."
+                    )
                 raise RuntimeError(
                     f"{stderr}\n\n"
                     "This server doesn't accept password login "
@@ -236,6 +368,19 @@ def launch_session(
 # ------------------------------------------------------------------
 # Windows
 # ------------------------------------------------------------------
+
+def launch_session_with_settings(session: Session, settings) -> None:
+    """launch_session() with the user's saved terminal/key settings applied;
+    shared by the main window and the headless --dial path."""
+    launch_session(
+        session,
+        identity_key_dir=settings.identity_key_dir,
+        font_face=settings.font_face,
+        font_size=settings.font_size,
+        terminal_cols=settings.terminal_cols,
+        terminal_rows=settings.terminal_rows,
+    )
+
 
 def _launch_windows(
     session_id: Optional[int],

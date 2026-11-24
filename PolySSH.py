@@ -1,7 +1,9 @@
 import shutil
 import sys
+import tkinter as tk
 import tkinter.messagebox as mb
 from pathlib import Path
+from typing import Optional
 
 # Resolve base directory whether running as a script or a PyInstaller bundle.
 if getattr(sys, "frozen", False):
@@ -27,7 +29,7 @@ sys.path.insert(0, str(BASE_DIR))
 from database import Database
 from logger import setup_logger
 from settings import SettingsManager
-from ssh import find_ssh
+from ssh import find_ssh, launch_session_with_settings
 from ui.main_window import MainWindow
 
 APP_DIR = Path.home() / ".polyssh"
@@ -57,6 +59,51 @@ def _migrate_legacy_file(legacy_candidates: list[Path], new_path: Path) -> None:
             except Exception:
                 pass
             return
+
+
+def _dial_argument(args: list[str]) -> Optional[str]:
+    """The value given to --dial (or --dial=N), "" if it has none, and None
+    if --dial wasn't passed at all."""
+    for i, arg in enumerate(args):
+        if arg == "--dial":
+            return args[i + 1] if i + 1 < len(args) else ""
+        if arg.startswith("--dial="):
+            return arg[len("--dial="):]
+    return None
+
+
+def _run_dial(value: str, db: Database, settings, logger) -> int:
+    """Headless speed dial: connect the session assigned to a number and
+    exit, without ever showing the main window — so it's safe to bind to an
+    OS hotkey or shortcut while the main window is also open."""
+    root = tk.Tk()
+    root.withdraw()
+    try:
+        try:
+            number = int(value)
+            if not 1 <= number <= 9:
+                raise ValueError
+        except ValueError:
+            mb.showerror("Speed Dial", "--dial needs a number from 1 to 9.", parent=root)
+            return 2
+
+        session = db.get_by_speed_dial(number)
+        if session is None:
+            mb.showerror("Speed Dial", f"No session is assigned to speed dial {number}.", parent=root)
+            return 1
+
+        try:
+            launch_session_with_settings(session, settings)
+        except RuntimeError as e:
+            mb.showerror("Connection Error", str(e), parent=root)
+            return 1
+        except Exception as e:
+            logger.error("Failed to launch session: %s", e)
+            mb.showerror("Error", f"Failed to launch session:\n{e}", parent=root)
+            return 1
+        return 0
+    finally:
+        root.destroy()
 
 
 def main() -> None:
@@ -130,6 +177,10 @@ def main() -> None:
         [BASE_DIR / "settings.json", Path.home() / ".ssh" / "settings.json"], SETTINGS_PATH
     )
     settings_mgr = SettingsManager(SETTINGS_PATH)
+
+    dial = _dial_argument(sys.argv[1:])
+    if dial is not None:
+        sys.exit(_run_dial(dial, db, settings_mgr.settings, logger))
 
     window = MainWindow(db, settings_mgr, logger)
     window.run()

@@ -11,9 +11,10 @@ Built and maintained by Accel IT.
 - **Organised session list**: sessions grouped into folders, in a clean, flat UI.
 - **One terminal per session**: each connection opens in its own tab, titled with the session name.
 - **Per-session appearance**: background colour, and optionally font face, font size and terminal size, without touching your system-wide terminal settings (Windows Terminal profiles are managed for you).
-- **Flexible authentication**: password, OpenSSH default keys, a specific key file, or FIDO2/hardware security keys (YubiKey and similar).
-- **Multiple FIDO2 identities per session**: register every key you own and star the default one.
+- **Three ways to authenticate**: *Password* (prompted in the terminal), *Local Identity* (whatever `ssh` already uses on this machine: agent, `~/.ssh/config`, default keys, so nothing is stored in the session), or *Key File / FIDO2* (pick specific key files, including FIDO2 hardware security keys such as YubiKeys).
+- **Several keys per session**: register every key you own, including a mix of ordinary and security-key files, and mark the default. PolySSH detects security keys automatically.
 - **Jump hosts**: connect through a bastion with OpenSSH `ProxyJump`.
+- **Speed dial**: give any session a number from 1 to 9, then press Ctrl+1 to Ctrl+9 to connect instantly. `PolySSH --dial 3` does the same from the command line without opening the window, so you can bind it to an OS-level hotkey or shortcut.
 - **Test Connection**: headless check that reports success or the failure reason in a dialog, with no terminal window.
 - **Export**: export your session list to WinSCP, FileZilla or plain `sftp://` URIs.
 
